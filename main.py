@@ -15,7 +15,7 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 # 1. CONFIGURATION
 # ==========================================
 
-GENAI_API_KEY = os.getenv("Gemini_Api_key") 
+GENAI_API_KEY = os.getenv("Gemini_Api_key")
 
 if not GENAI_API_KEY:
     print("WARNING: GOOGLE_API_KEY not found. App will fail if not set.")
@@ -23,7 +23,7 @@ if not GENAI_API_KEY:
 genai.configure(api_key=GENAI_API_KEY)
 
 # NOTE: "gemini-2.5-flash" does not exist yet. Using 1.5-Flash.
-MODEL_ID = "gemini-1.5-flash"
+MODEL_ID = "gemini-2.5-flash"
 
 SAFETY_SETTINGS = {
     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
@@ -51,21 +51,15 @@ class BillItem(BaseModel):
     item_rate: float
     item_quantity: float
 
-class SubTotalItem(BaseModel):
-    section_name: str
-    amount: float
 
 class PageLineItems(BaseModel):
     page_no: int
     page_type: Literal["Bill Detail", "Final Bill", "Pharmacy", "Unknown"]
     bill_items: List[BillItem]
-    # FIX: Added default empty list so it doesn't crash if missing
-    sub_totals: List[SubTotalItem] = [] 
 
 class ExtractedData(BaseModel):
     pagewise_line_items: List[PageLineItems]
-    total_line_items_found: int
-    grand_total_amount: float
+    total_item_count: int
 
 class TokenUsage(BaseModel):
     total_tokens: int
@@ -143,6 +137,8 @@ async def extract_bill_data(request: ExtractionRequest):
         RULES:
         1. If a row has Rate, Qty, and Amount, map them accurately.
         2. If a row has only Amount, set Rate=Amount and Qty=1.
+
+        
         """
 
         try:
@@ -160,7 +156,6 @@ async def extract_bill_data(request: ExtractionRequest):
                 page_no=current_page_num,
                 page_type=page_json.get("page_type", "Unknown"),
                 bill_items=page_json.get("bill_items", []),
-                sub_totals=[] # Empty list satisfies the model now
             ))
 
         except Exception as e:
@@ -170,11 +165,8 @@ async def extract_bill_data(request: ExtractionRequest):
                 page_no=current_page_num, 
                 page_type="Unknown", 
                 bill_items=[], 
-                sub_totals=[]
             ))
 
-    # --- FIXING THE TOTALS CALCULATION ---
-    grand_total = sum(item.item_amount for p in all_pages_data for item in p.bill_items)
     total_count = sum(len(p.bill_items) for p in all_pages_data)
 
     return APIResponse(
@@ -182,9 +174,7 @@ async def extract_bill_data(request: ExtractionRequest):
         token_usage=TokenUsage(**usage_stats),
         data=ExtractedData(
             pagewise_line_items=all_pages_data,
-            # FIX: Variable names must match the Class Definition exactly
-            total_line_items_found=total_count, 
-            grand_total_amount=round(grand_total, 2)
+            total_item_count=total_count, 
         )
     )
 
