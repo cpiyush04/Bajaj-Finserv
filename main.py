@@ -137,42 +137,43 @@ async def extract_bill_data(request: ExtractionRequest):
         
         prompt = f"""
         Extract data ONLY from this specific page (Page {current_page_num}).
-        RETURN JSON SCHAME:
+        
+        RETURN JSON SCHEMA:
         {{
             "page_type": "Bill Detail" | "Final Bill" | "Pharmacy",
-            "bill_items": [ {{ "item_name": "str", "item_amount": float, "item_rate": float, "item_quantity": float }} ],
+            "bill_items": [ {{ "item_name": "str", "item_amount": float, "item_rate": float, "item_quantity": float }} ]
         }}
+        
         RULES:
         1. If a row has Rate, Qty, and Amount, map them accurately.
         2. If a row has only Amount, set Rate=Amount and Qty=1.
 
-        Expample JSON Output:
-        {
-        "is_success": "boolean", // If Status code 200 and following valid schema, then true
-        "token_usage": {
-            "total_tokens": "integer", // Cumulative Tokens from all LLM calls
-            "input_tokens": "integer", // Cumulative Tokens from all LLM calls
-            "output_tokens": "integer" // Cumulative Tokens from all LLM calls
-        },
-        "data": {
-            "pagewise_line_items": [
-            {
-                "page_no": "string",
-                "page_type": "Bill Detail | Final Bill | Pharmacy",
-                "bill_items": [
-                {
-                    "item_name": "string", // Exactly as mentioned in the bill
-                    "item_amount": "float", // Net Amount of the item post discounts as mentioned in the bill
-                    "item_rate": "float", // Exactly as mentioned in the bill
-                    "item_quantity": "float" // Exactly as mentioned in the bill
-                }
-                ]
-            }
-            ],
-            "total_item_count": "integer" // Count of items across all pages
-        }
-        }
-        
+        Example JSON Output:
+        {{
+            "is_success": true, 
+            "token_usage": {{
+                "total_tokens": 0, 
+                "input_tokens": 0,
+                "output_tokens": 0
+            }},
+            "data": {{
+                "pagewise_line_items": [
+                    {{
+                        "page_no": "{current_page_num}",
+                        "page_type": "Bill Detail",
+                        "bill_items": [
+                            {{
+                                "item_name": "Sample Item", 
+                                "item_amount": 100.00, 
+                                "item_rate": 50.00, 
+                                "item_quantity": 2.0
+                            }}
+                        ]
+                    }}
+                ],
+                "total_item_count": 1
+            }}
+        }}
         """
 
         try:
