@@ -141,11 +141,38 @@ async def extract_bill_data(request: ExtractionRequest):
         {{
             "page_type": "Bill Detail" | "Final Bill" | "Pharmacy",
             "bill_items": [ {{ "item_name": "str", "item_amount": float, "item_rate": float, "item_quantity": float }} ],
-            "sub_totals": [ {{ "section_name": "str", "amount": float }} ]
         }}
         RULES:
         1. If a row has Rate, Qty, and Amount, map them accurately.
         2. If a row has only Amount, set Rate=Amount and Qty=1.
+
+        Expample JSON Output:
+        {
+        "is_success": "boolean", // If Status code 200 and following valid schema, then true
+        "token_usage": {
+            "total_tokens": "integer", // Cumulative Tokens from all LLM calls
+            "input_tokens": "integer", // Cumulative Tokens from all LLM calls
+            "output_tokens": "integer" // Cumulative Tokens from all LLM calls
+        },
+        "data": {
+            "pagewise_line_items": [
+            {
+                "page_no": "string",
+                "page_type": "Bill Detail | Final Bill | Pharmacy",
+                "bill_items": [
+                {
+                    "item_name": "string", // Exactly as mentioned in the bill
+                    "item_amount": "float", // Net Amount of the item post discounts as mentioned in the bill
+                    "item_rate": "float", // Exactly as mentioned in the bill
+                    "item_quantity": "float" // Exactly as mentioned in the bill
+                }
+                ]
+            }
+            ],
+            "total_item_count": "integer" // Count of items across all pages
+        }
+        }
+        
         """
 
         try:
@@ -162,14 +189,14 @@ async def extract_bill_data(request: ExtractionRequest):
                 page_no=current_page_num,
                 page_type=page_json.get("page_type", "Unknown"),
                 bill_items=page_json.get("bill_items", []),
-                sub_totals=page_json.get("sub_totals", [])
+                # sub_totals=page_json.get("sub_totals", [])
             ))
 
         except Exception as e:
             print(f"Failed to process page {current_page_num}: {e}")
             all_pages_data.append(PageLineItems(page_no=current_page_num, page_type="Unknown", bill_items=[], sub_totals=[]))
 
-    grand_total = sum(item.item_amount for p in all_pages_data for item in p.bill_items)
+    # grand_total = sum(item.item_amount for p in all_pages_data for item in p.bill_items)
     total_count = sum(len(p.bill_items) for p in all_pages_data)
 
     return APIResponse(
@@ -177,8 +204,8 @@ async def extract_bill_data(request: ExtractionRequest):
         token_usage=TokenUsage(**usage_stats),
         data=ExtractedData(
             pagewise_line_items=all_pages_data,
-            total_line_items_found=total_count,
-            grand_total_amount=round(grand_total, 2)
+            total_item_count=total_count,
+            # grand_total_amount=round(grand_total, 2)
         )
     )
 
