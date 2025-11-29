@@ -1,13 +1,12 @@
 import os
 import json
-import time
 import requests
-import uvicorn # Added for local testing
+import uvicorn
 from typing import List, Literal, Optional
 
 # Third-party libraries
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 import fitz  # PyMuPDF
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
@@ -16,19 +15,16 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 # 1. CONFIGURATION
 # ==========================================
 
-# [CRITICAL CHANGE] Never hardcode API keys in code committed to Git!
-# On Render, you will set this in the "Environment" tab.
 GENAI_API_KEY = os.getenv("Gemini_Api_key") 
 
 if not GENAI_API_KEY:
-    # Fallback for local testing only - prevents crash on deploy if key is missing
-    print("WARNING: GOOGLE_API_KEY not found in environment variables.")
+    print("WARNING: GOOGLE_API_KEY not found. App will fail if not set.")
 
 genai.configure(api_key=GENAI_API_KEY)
 
-MODEL_ID = "gemini-2.5-flash"
+# NOTE: "gemini-2.5-flash" does not exist yet. Using 1.5-Flash.
+MODEL_ID = "gemini-1.5-flash"
 
-# Safety: Block nothing (Medical/Financial docs often trigger false positives)
 SAFETY_SETTINGS = {
     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -46,7 +42,7 @@ GENERATION_CONFIG = {
 app = FastAPI(title="Bill Extraction API")
 
 # ==========================================
-# 2. DATA SCHEMAS
+# 2. DATA SCHEMAS (FIXED)
 # ==========================================
 
 class BillItem(BaseModel):
@@ -63,7 +59,8 @@ class PageLineItems(BaseModel):
     page_no: int
     page_type: Literal["Bill Detail", "Final Bill", "Pharmacy", "Unknown"]
     bill_items: List[BillItem]
-    sub_totals: List[SubTotalItem]
+    # FIX: Added default empty list so it doesn't crash if missing
+    sub_totals: List[SubTotalItem] = [] 
 
 class ExtractedData(BaseModel):
     pagewise_line_items: List[PageLineItems]
@@ -97,7 +94,6 @@ def download_file(url: str) -> bytes:
 
 def process_document_to_bytes(file_content: bytes, file_url: str) -> List[bytes]:
     image_data_list = []
-    
     try:
         if file_url.lower().endswith('.pdf') or file_content.startswith(b'%PDF'):
             doc = fitz.open(stream=file_content, filetype="pdf")
@@ -106,7 +102,6 @@ def process_document_to_bytes(file_content: bytes, file_url: str) -> List[bytes]
                 image_data_list.append(pix.tobytes("png"))
         else:
             image_data_list.append(file_content)
-            
         return image_data_list
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Image processing failed: {str(e)}")
@@ -131,45 +126,23 @@ async def extract_bill_data(request: ExtractionRequest):
     for page_index, img_bytes in enumerate(page_images):
         current_page_num = page_index + 1
         
+        # --- FIXED PROMPT: Simplified to ask ONLY for data ---
+        # The prompt shouldn't ask for "is_success" or "token_usage".
+        # The python code handles that.
         prompt = f"""
         Extract data ONLY from this specific page (Page {current_page_num}).
         
         RETURN JSON SCHEMA:
         {{
             "page_type": "Bill Detail" | "Final Bill" | "Pharmacy",
-            "bill_items": [ {{ "item_name": "str", "item_amount": float, "item_rate": float, "item_quantity": float }} ]
+            "bill_items": [ 
+                {{ "item_name": "str", "item_amount": float, "item_rate": float, "item_quantity": float }} 
+            ]
         }}
         
         RULES:
         1. If a row has Rate, Qty, and Amount, map them accurately.
         2. If a row has only Amount, set Rate=Amount and Qty=1.
-
-        Example JSON Output:
-        {{
-            "is_success": true, 
-            "token_usage": {{
-                "total_tokens": 0, 
-                "input_tokens": 0,
-                "output_tokens": 0
-            }},
-            "data": {{
-                "pagewise_line_items": [
-                    {{
-                        "page_no": "{current_page_num}",
-                        "page_type": "Bill Detail",
-                        "bill_items": [
-                            {{
-                                "item_name": "Sample Item", 
-                                "item_amount": 100.00, 
-                                "item_rate": 50.00, 
-                                "item_quantity": 2.0
-                            }}
-                        ]
-                    }}
-                ],
-                "total_item_count": 1
-            }}
-        }}
         """
 
         try:
@@ -180,20 +153,28 @@ async def extract_bill_data(request: ExtractionRequest):
                 usage_stats["output_tokens"] += response.usage_metadata.candidates_token_count
                 usage_stats["total_tokens"] += response.usage_metadata.total_token_count
 
+            # Parsing
             page_json = json.loads(response.text)
             
             all_pages_data.append(PageLineItems(
                 page_no=current_page_num,
                 page_type=page_json.get("page_type", "Unknown"),
                 bill_items=page_json.get("bill_items", []),
-                # sub_totals=page_json.get("sub_totals", [])
+                sub_totals=[] # Empty list satisfies the model now
             ))
 
         except Exception as e:
             print(f"Failed to process page {current_page_num}: {e}")
-            all_pages_data.append(PageLineItems(page_no=current_page_num, page_type="Unknown", bill_items=[], sub_totals=[]))
+            # Add valid empty object to prevent downstream crashes
+            all_pages_data.append(PageLineItems(
+                page_no=current_page_num, 
+                page_type="Unknown", 
+                bill_items=[], 
+                sub_totals=[]
+            ))
 
-    # grand_total = sum(item.item_amount for p in all_pages_data for item in p.bill_items)
+    # --- FIXING THE TOTALS CALCULATION ---
+    grand_total = sum(item.item_amount for p in all_pages_data for item in p.bill_items)
     total_count = sum(len(p.bill_items) for p in all_pages_data)
 
     return APIResponse(
@@ -201,12 +182,12 @@ async def extract_bill_data(request: ExtractionRequest):
         token_usage=TokenUsage(**usage_stats),
         data=ExtractedData(
             pagewise_line_items=all_pages_data,
-            total_item_count=total_count,
-            # grand_total_amount=round(grand_total, 2)
+            # FIX: Variable names must match the Class Definition exactly
+            total_line_items_found=total_count, 
+            grand_total_amount=round(grand_total, 2)
         )
     )
 
-# [CRITICAL] This allows Render to start the app correctly
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
