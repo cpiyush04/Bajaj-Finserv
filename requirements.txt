@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+requests
+pymupdf
+google-generativeai
+pydantic
