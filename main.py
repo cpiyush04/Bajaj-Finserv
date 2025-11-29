@@ -43,10 +43,6 @@ GENERATION_CONFIG = {
     "response_mime_type": "application/json",
 }
 
-# Note: On Render, this directory is ephemeral (files delete on restart)
-DEBUG_DIR = "debug_images"
-os.makedirs(DEBUG_DIR, exist_ok=True)
-
 app = FastAPI(title="Bill Extraction API")
 
 # ==========================================
